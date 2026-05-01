@@ -1,0 +1,45 @@
+[project]
+name = "code-constrained-plan-gen"
+version = "0.0.1"
+description = "Building-code-constrained floor plan generation via diffusion"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "torchvision",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "hydra-core",
+    "omegaconf",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "pillow",
+    "shapely",
+    "networkx",
+    "scikit-learn",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "pre-commit",
+]
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
