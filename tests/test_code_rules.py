@@ -178,3 +178,15 @@ def test_jurisdiction_specs_have_distinct_thresholds() -> None:
         != us["egress_travel_distance"]["max_distance_m"]
     )
     assert iso["dead_end_corridor"]["max_dead_end_length_m"] > 0.0
+
+
+def test_global_jurisdiction_set_is_complete() -> None:
+    """Sanity check that all 9 representative jurisdictions are registered."""
+    from code_module import JURISDICTIONS
+
+    expected = {"ISO", "EU", "US", "UK", "DE", "TR", "JP", "AU", "SG"}
+    assert expected <= set(JURISDICTIONS), (
+        f"Missing jurisdictions: {expected - set(JURISDICTIONS)}"
+    )
+    for code, spec in JURISDICTIONS.items():
+        assert spec.build(), f"Jurisdiction {code} produced empty rule list"

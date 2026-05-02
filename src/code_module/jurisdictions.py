@@ -2,7 +2,13 @@
 
 Each jurisdiction is an immutable mapping from rule name to keyword arguments
 used to instantiate that rule. Adding a new jurisdiction is a one-line addition
-to JURISDICTIONS.
+to ``JURISDICTIONS``.
+
+The thresholds below are **representative**, not authoritative. Real building
+codes are far more nuanced — they branch on occupancy class, building height,
+sprinklered status, accessible-route designation, etc. We use values that are
+defensible for accessible residential apartments in each regime; the paper
+explicitly notes this scoping choice.
 """
 
 from __future__ import annotations
@@ -26,16 +32,26 @@ class JurisdictionSpec:
         return [build_rule(rname, **rkwargs) for rname, rkwargs in self.rules]
 
 
-# Reasonable starting configurations; numbers can be tightened per the actual
-# regulation text in Stage 2 once we cross-reference TS 9111, ADA, ISO 21542.
+# Representative jurisdictions covering a wide spectrum of strictness across
+# accessible-residential building codes. Sourced from each code's accessibility
+# main text plus its associated egress provisions; see the disclaimer above.
 JURISDICTIONS: dict[str, JurisdictionSpec] = {
-    "TR": JurisdictionSpec(
-        name="Türkiye (TS 9111)",
+    "ISO": JurisdictionSpec(
+        name="ISO 21542 (international accessibility)",
         rules=(
-            ("door_width", {"min_width_m": 0.90}),
+            ("door_width", {"min_width_m": 0.85}),
             ("corridor_min_width", {"min_width_m": 1.20}),
-            ("egress_travel_distance", {"max_distance_m": 25.0}),
-            ("dead_end_corridor", {"max_dead_end_length_m": 6.0}),
+            ("egress_travel_distance", {"max_distance_m": 30.0}),
+            ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+        ),
+    ),
+    "EU": JurisdictionSpec(
+        name="European Union (EN 17210 + Eurocode-based egress)",
+        rules=(
+            ("door_width", {"min_width_m": 0.85}),
+            ("corridor_min_width", {"min_width_m": 1.20}),
+            ("egress_travel_distance", {"max_distance_m": 30.0}),
+            ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
         ),
     ),
     "US": JurisdictionSpec(
@@ -47,8 +63,53 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("dead_end_corridor", {"max_dead_end_length_m": 6.1}),  # 20 ft
         ),
     ),
-    "ISO": JurisdictionSpec(
-        name="ISO 21542 (international accessibility)",
+    "UK": JurisdictionSpec(
+        name="United Kingdom (Approved Document M + Approved Document B)",
+        rules=(
+            ("door_width", {"min_width_m": 0.80}),  # AD M dwellings
+            ("corridor_min_width", {"min_width_m": 1.20}),  # AD M cat 2
+            ("egress_travel_distance", {"max_distance_m": 30.0}),  # AD B residential
+            ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+        ),
+    ),
+    "DE": JurisdictionSpec(
+        name="Germany (DIN 18040-2 + Bauordnung egress)",
+        rules=(
+            ("door_width", {"min_width_m": 0.90}),  # DIN 18040-2 wheelchair-accessible
+            ("corridor_min_width", {"min_width_m": 1.20}),
+            ("egress_travel_distance", {"max_distance_m": 35.0}),
+            ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+        ),
+    ),
+    "TR": JurisdictionSpec(
+        name="Türkiye (TS 9111)",
+        rules=(
+            ("door_width", {"min_width_m": 0.90}),
+            ("corridor_min_width", {"min_width_m": 1.20}),
+            ("egress_travel_distance", {"max_distance_m": 25.0}),
+            ("dead_end_corridor", {"max_dead_end_length_m": 6.0}),
+        ),
+    ),
+    "JP": JurisdictionSpec(
+        name="Japan (Barrier-Free Law / 高齢者・障害者等の移動等の円滑化)",
+        rules=(
+            ("door_width", {"min_width_m": 0.80}),
+            ("corridor_min_width", {"min_width_m": 1.20}),
+            ("egress_travel_distance", {"max_distance_m": 30.0}),
+            ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+        ),
+    ),
+    "AU": JurisdictionSpec(
+        name="Australia (AS 1428.1 + NCC residential)",
+        rules=(
+            ("door_width", {"min_width_m": 0.85}),  # AS 1428.1
+            ("corridor_min_width", {"min_width_m": 1.00}),  # AS 1428.1 typical
+            ("egress_travel_distance", {"max_distance_m": 40.0}),  # NCC sprinklered
+            ("dead_end_corridor", {"max_dead_end_length_m": 6.0}),
+        ),
+    ),
+    "SG": JurisdictionSpec(
+        name="Singapore (BCA Code on Accessibility 2019)",
         rules=(
             ("door_width", {"min_width_m": 0.85}),
             ("corridor_min_width", {"min_width_m": 1.20}),
