@@ -20,6 +20,15 @@ from .base import (
     build_rule,
     register_rule,
 )
+from .differentiable import (
+    TensorRepr,
+    compliance_energy_for_plan,
+    corridor_width_energy,
+    door_width_energy,
+    egress_distance_energy,
+    plan_to_tensor_repr,
+    total_compliance_energy,
+)
 from .egress import DeadEndCorridor, EgressTravelDistance
 from .jurisdictions import JURISDICTIONS, JurisdictionSpec, get_jurisdiction
 
@@ -73,8 +82,15 @@ __all__ = [
     "RuleClass",
     "RuleResult",
     "RULE_REGISTRY",
+    "TensorRepr",
     "build_rule",
+    "compliance_energy_for_plan",
+    "corridor_width_energy",
+    "door_width_energy",
+    "egress_distance_energy",
     "evaluate_jurisdiction",
     "get_jurisdiction",
+    "plan_to_tensor_repr",
     "register_rule",
+    "total_compliance_energy",
 ]

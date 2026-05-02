@@ -20,10 +20,144 @@ verified to:
 from __future__ import annotations
 
 import logging
+import math
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
 
+import networkx as nx
 import torch
 
+if TYPE_CHECKING:  # avoid hard runtime dep on shapely for callers using only the tensor API
+    from shapely.geometry import Polygon
+
+    from .base import PlanGraph
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# PlanGraph -> tensor bridge
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TensorRepr:
+    """Tensor representation of a PlanGraph used by the differentiable energies.
+
+    Fields are aligned so they can be passed directly into
+    ``total_compliance_energy``.
+    """
+
+    door_corners: torch.Tensor  # (N_doors, 4, 2)
+    corridor_corners: torch.Tensor  # (M_corridors, 4, 2)
+    pairwise_distances: torch.Tensor  # (R, R) shortest-path in meters
+    entrance_mask: torch.Tensor  # (R,) bool
+    room_node_ids: tuple  # ordering of rooms; same order as rows/cols of distances
+
+
+def _polygon_rotated_rect_corners(polygon: "Polygon") -> Optional[list[tuple[float, float]]]:
+    """Return the 4 corners of the rotated minimum-area bounding rectangle, or None."""
+    if polygon.is_empty:
+        return None
+    min_box = polygon.minimum_rotated_rectangle
+    coords = list(min_box.exterior.coords)
+    if len(coords) < 5:  # closed ring expected
+        return None
+    return [(float(x), float(y)) for x, y in coords[:4]]
+
+
+def plan_to_tensor_repr(
+    plan: "PlanGraph",
+    *,
+    corridor_room_type: str = "Corridor",
+    dtype: torch.dtype = torch.float64,
+    device: Optional[torch.device] = None,
+) -> TensorRepr:
+    """Convert a ``PlanGraph`` into the tensors consumed by the energies.
+
+    - ``door_corners`` are gathered from edge ``door_geometry`` polygons (where
+      present); pickle-only graphs without door geometry produce an empty tensor.
+    - ``corridor_corners`` come from rotated min-area boxes of every node whose
+      ``room_type`` matches ``corridor_room_type``.
+    - ``pairwise_distances`` is the all-pairs shortest path through the graph,
+      with edges weighted by centroid distance (in meters via
+      ``plan.unit_scale_m_per_unit``); disconnected pairs become +inf.
+    - ``entrance_mask`` flags rooms touched by at least one ``ENTRANCE`` edge.
+    """
+    rooms = plan.rooms()
+    room_ids = list(rooms.keys())
+    n_rooms = len(room_ids)
+
+    # Door corners
+    door_corner_lists: list[list[tuple[float, float]]] = []
+    for _, _, edata in plan.graph.edges(data=True):
+        door_geom = edata.get("door_geometry")
+        if door_geom is None:
+            continue
+        corners = _polygon_rotated_rect_corners(door_geom)
+        if corners is None:
+            continue
+        door_corner_lists.append(corners)
+
+    if door_corner_lists:
+        door_corners = torch.tensor(door_corner_lists, dtype=dtype, device=device)
+    else:
+        door_corners = torch.empty((0, 4, 2), dtype=dtype, device=device)
+
+    # Corridor corners
+    corridor_corner_lists: list[list[tuple[float, float]]] = []
+    for _, room in rooms.items():
+        if room.room_type != corridor_room_type:
+            continue
+        corners = _polygon_rotated_rect_corners(room.geometry)
+        if corners is None:
+            continue
+        corridor_corner_lists.append(corners)
+
+    if corridor_corner_lists:
+        corridor_corners = torch.tensor(corridor_corner_lists, dtype=dtype, device=device)
+    else:
+        corridor_corners = torch.empty((0, 4, 2), dtype=dtype, device=device)
+
+    # Pairwise shortest-path distances
+    weighted = nx.Graph()
+    for nid in room_ids:
+        weighted.add_node(nid)
+    for u, v, edata in plan.graph.edges(data=True):
+        if u not in rooms or v not in rooms:
+            continue
+        cu = rooms[u].centroid
+        cv = rooms[v].centroid
+        d_units = math.hypot(cu[0] - cv[0], cu[1] - cv[1])
+        d_m = d_units * plan.unit_scale_m_per_unit
+        weighted.add_edge(u, v, weight=d_m)
+
+    distances = torch.full((n_rooms, n_rooms), float("inf"), dtype=dtype, device=device)
+    for i, u in enumerate(room_ids):
+        try:
+            paths = nx.single_source_dijkstra_path_length(weighted, u, weight="weight")
+        except nx.NodeNotFound:
+            continue
+        for v, d in paths.items():
+            if v in rooms:
+                j = room_ids.index(v)
+                distances[i, j] = d
+
+    # Entrance mask
+    entrance_ids = set(plan.entrance_nodes())
+    entrance_mask = torch.tensor(
+        [nid in entrance_ids for nid in room_ids],
+        dtype=torch.bool,
+        device=device,
+    )
+
+    return TensorRepr(
+        door_corners=door_corners,
+        corridor_corners=corridor_corners,
+        pairwise_distances=distances,
+        entrance_mask=entrance_mask,
+        room_node_ids=tuple(room_ids),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +314,46 @@ def total_compliance_energy(
     return w_door * e_door + w_corr * e_corr + w_egr * e_egr
 
 
+def compliance_energy_for_plan(
+    plan: "PlanGraph",
+    *,
+    door_min_width_m: float,
+    corridor_min_width_m: float,
+    egress_max_distance_m: float,
+    weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    dtype: torch.dtype = torch.float64,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """One-shot: convert a ``PlanGraph`` and return the soft compliance energy.
+
+    Useful for sanity checks against the shapely-based hard rule check and as
+    a reference implementation for Stage 3's sampling-time guidance loop.
+    """
+    repr = plan_to_tensor_repr(plan, dtype=dtype, device=device)
+    distances = repr.pairwise_distances
+    if torch.isinf(distances).any():
+        # Replace +inf with a large finite penalty so soft-min stays well-defined
+        big = torch.tensor(1e6, dtype=distances.dtype, device=distances.device)
+        distances = torch.where(torch.isinf(distances), big, distances)
+    return total_compliance_energy(
+        door_corners=repr.door_corners,
+        corridor_corners=repr.corridor_corners,
+        pairwise_distances=distances,
+        entrance_mask=repr.entrance_mask,
+        door_min_width_m=door_min_width_m,
+        corridor_min_width_m=corridor_min_width_m,
+        egress_max_distance_m=egress_max_distance_m,
+        weights=weights,
+    )
+
+
 __all__ = [
+    "TensorRepr",
+    "compliance_energy_for_plan",
     "corridor_width_energy",
     "door_width_energy",
     "egress_distance_energy",
+    "plan_to_tensor_repr",
     "soft_min",
     "total_compliance_energy",
 ]
