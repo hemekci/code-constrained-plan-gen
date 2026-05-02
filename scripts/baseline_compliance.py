@@ -27,15 +27,20 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from code_module import JURISDICTIONS, evaluate_jurisdiction  # noqa: E402
-from data_module import iter_msd_pickle_floors  # noqa: E402
+from data_module import (  # noqa: E402
+    CSVDoorIndex,
+    iter_msd_pickle_floors,
+    iter_msd_pickle_floors_with_doors,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def scan(split: str, limit: int) -> dict:
+def scan(split: str, limit: int, with_doors: bool = False) -> dict:
     summary: dict = {
         "split": split,
         "limit": limit,
+        "with_doors": with_doors,
         "n_floors_scanned": 0,
         "n_floors_failed_to_load": 0,
         "jurisdictions": {},
@@ -47,8 +52,14 @@ def scan(split: str, limit: int) -> dict:
             "n_all_passed": 0,
         }
 
+    if with_doors:
+        csv_index = CSVDoorIndex(REPO_ROOT / "data" / "MSD" / "raw" / "mds_V2_5.372k.csv")
+        floor_iter = iter_msd_pickle_floors_with_doors(csv_index, split=split, limit=limit)
+    else:
+        floor_iter = iter_msd_pickle_floors(split=split, limit=limit)
+
     n_loaded = 0
-    for plan in iter_msd_pickle_floors(split=split, limit=limit):
+    for plan in floor_iter:
         n_loaded += 1
         for jcode in JURISDICTIONS:
             try:
@@ -90,6 +101,12 @@ def main() -> None:
     parser.add_argument("--split", choices=("train", "test"), default="train")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument(
+        "--with-doors",
+        action="store_true",
+        help="Augment pickle plans with door geometries from the CSV (slower, "
+        "but enables real door-width compliance checks).",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=REPO_ROOT / "output" / "baseline_compliance.json",
@@ -98,7 +115,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    summary = scan(args.split, args.limit)
+    summary = scan(args.split, args.limit, with_doors=args.with_doors)
     with args.out.open("w") as fh:
         json.dump(summary, fh, indent=2, default=str)
 

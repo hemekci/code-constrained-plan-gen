@@ -177,7 +177,7 @@ def _build_graph_for_floor(
 def load_msd_floor(
     floor_id: str | int,
     raw_dir: Optional[Path] = None,
-    column: str = "room_type",
+    column: str = "roomtype",
     unit_scale_m_per_unit: float = 1.0,
 ) -> PlanGraph:
     """Load a single MSD floor as a PlanGraph.
@@ -341,6 +341,130 @@ def load_msd_floor_pickle(pickle_path: Path | str) -> PlanGraph:
     )
 
 
+def augment_doors_from_csv(
+    plan: PlanGraph,
+    csv_df: pd.DataFrame,
+    door_match_tolerance_m: float = 0.1,
+) -> PlanGraph:
+    """Return a copy of `plan` with `door_geometry` assigned to each door edge.
+
+    MSD's pre-extracted graphs (pickle) preserve only the connectivity *type*
+    (`door` / `entrance` / `passage`), not the door polygons. To check
+    door-width compliance we need the actual geometry, which lives in the CSV.
+
+    For each pickle edge marked as `door`, we look in the CSV for door polygons
+    that lie within `door_match_tolerance_m` of *both* endpoints' room
+    polygons; if found, we attach the door polygon to the edge. Edges with no
+    matching door (e.g., ambiguous proximity) keep `connectivity` but receive
+    no `door_geometry`.
+
+    Parameters
+    ----------
+    plan
+        A `PlanGraph` produced by `load_msd_floor_pickle`.
+    csv_df
+        The MSD CSV pre-filtered to door rows for the relevant floor:
+        `df[(df.floor_id == fid) & (df.roomtype.isin(["Door", "Entrance Door"]))]`.
+    door_match_tolerance_m
+        Maximum distance from a door polygon to a candidate room polygon.
+
+    Returns
+    -------
+    A new `PlanGraph` with door_geometry filled in where matchable.
+    """
+    door_polys: list[tuple[Polygon, str]] = []
+    for _, row in csv_df.iterrows():
+        try:
+            poly = _coerce_geometry(row["geom"])
+        except Exception:  # noqa: BLE001
+            continue
+        door_polys.append((poly, str(row.get("roomtype", "Door"))))
+
+    rooms = plan.rooms()
+    new_g = nx.Graph()
+    for nid, attrs in plan.graph.nodes(data=True):
+        new_g.add_node(nid, **attrs)
+
+    for u, v, edata in plan.graph.edges(data=True):
+        new_edata = dict(edata)
+        conn = edata.get("connectivity")
+        if conn in (Connectivity.DOOR, Connectivity.ENTRANCE) and (u in rooms and v in rooms):
+            poly_u = rooms[u].geometry
+            poly_v = rooms[v].geometry
+            best = None
+            best_score = float("inf")
+            for door, dlabel in door_polys:
+                if conn == Connectivity.ENTRANCE and dlabel != "Entrance Door":
+                    continue
+                if conn == Connectivity.DOOR and dlabel != "Door":
+                    continue
+                d_u = door.distance(poly_u)
+                d_v = door.distance(poly_v)
+                if d_u <= door_match_tolerance_m and d_v <= door_match_tolerance_m:
+                    score = d_u + d_v
+                    if score < best_score:
+                        best_score = score
+                        best = door
+            if best is not None:
+                new_edata["door_geometry"] = best
+        new_g.add_edge(u, v, **new_edata)
+
+    return PlanGraph(
+        graph=new_g,
+        boundary=plan.boundary,
+        unit_scale_m_per_unit=plan.unit_scale_m_per_unit,
+        plan_id=plan.plan_id,
+    )
+
+
+class CSVDoorIndex:
+    """Lazy, in-memory index over the MSD CSV for fast per-floor door lookups.
+
+    Loading the full ~1M-row CSV once and indexing by floor_id is much faster
+    than scanning per call. Used by `iter_msd_pickle_floors_with_doors`.
+    """
+
+    def __init__(self, csv_path: Path | str):
+        path = Path(csv_path)
+        logger.info("Loading MSD CSV door index from %s ...", path)
+        df = pd.read_csv(
+            path,
+            usecols=["floor_id", "geom", "roomtype"],
+        )
+        self._doors_only = df[df["roomtype"].isin(["Door", "Entrance Door"])]
+        self._by_floor = {
+            int(fid): grp.reset_index(drop=True)
+            for fid, grp in self._doors_only.groupby("floor_id")
+        }
+        logger.info(
+            "Indexed %d floors, %d total door polygons",
+            len(self._by_floor),
+            len(self._doors_only),
+        )
+
+    def for_floor(self, floor_id: str | int) -> pd.DataFrame:
+        try:
+            fid = int(floor_id)
+        except (TypeError, ValueError):
+            return pd.DataFrame(columns=["floor_id", "geom", "roomtype"])
+        return self._by_floor.get(fid, pd.DataFrame(columns=["floor_id", "geom", "roomtype"]))
+
+
+def iter_msd_pickle_floors_with_doors(
+    csv_index: CSVDoorIndex,
+    split: str = "train",
+    raw_dir: Optional[Path] = None,
+    limit: Optional[int] = None,
+) -> Iterator[PlanGraph]:
+    """Like `iter_msd_pickle_floors` but augments each plan with CSV doors."""
+    for plan in iter_msd_pickle_floors(split=split, raw_dir=raw_dir, limit=limit):
+        door_df = csv_index.for_floor(plan.plan_id)
+        if door_df.empty:
+            yield plan
+            continue
+        yield augment_doors_from_csv(plan, door_df)
+
+
 def iter_msd_pickle_floors(
     split: str = "train",
     raw_dir: Optional[Path] = None,
@@ -377,12 +501,15 @@ def iter_msd_pickle_floors(
 
 
 __all__ = [
+    "CSVDoorIndex",
     "DEFAULT_RAW_DIR",
     "PASSAGE_DISTANCE_THRESHOLD",
     "DOOR_DISTANCE_THRESHOLD",
     "ROOM_NAMES",
+    "augment_doors_from_csv",
     "iter_msd_floors",
     "iter_msd_pickle_floors",
+    "iter_msd_pickle_floors_with_doors",
     "load_msd_floor",
     "load_msd_floor_pickle",
 ]
