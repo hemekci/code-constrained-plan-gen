@@ -164,4 +164,80 @@ class CorridorMinWidth(Rule):
         )
 
 
-__all__ = ["CorridorMinWidth", "DoorWidth"]
+def _polygon_inscribed_circle_diameter(poly: Polygon) -> float:
+    """Diameter of the largest circle inscribed in the polygon.
+
+    Uses shapely's maximum_inscribed_circle when available (>= 2.0). The
+    inscribed-circle diameter is the standard differentiable proxy for
+    "wheelchair turn space available" within a room.
+    """
+    if poly.is_empty:
+        return 0.0
+    try:
+        # Tolerance trades precision for speed; 0.05 m is plenty for room-scale
+        line = poly.maximum_inscribed_circle(tolerance=0.05)  # type: ignore[attr-defined]
+        # The returned LineString has length = radius
+        radius = line.length
+        return float(2.0 * radius)
+    except (AttributeError, Exception):  # noqa: BLE001
+        # Fallback: distance from centroid to boundary, doubled (lower bound)
+        try:
+            return float(2.0 * poly.exterior.distance(poly.centroid))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+
+@register_rule("wheelchair_turn_radius")
+@dataclass
+class WheelchairTurnRadius(Rule):
+    """Each accessible room must contain a turning space whose inscribed
+    circle diameter >= ``min_diameter_m`` (Class 2).
+
+    Default 1.50 m is the most common accessibility-code minimum
+    (ISO 21542, EN 17210, ADA, AS 1428.1). DIN 18040-2 R variant requires
+    1.50 m as well. ``applies_to_room_types`` lets jurisdictions tighten or
+    relax which rooms must comply (e.g. only Bathroom, only Bedroom +
+    Livingroom, etc.).
+    """
+
+    min_diameter_m: float = 1.50
+    applies_to_room_types: tuple[str, ...] = ("Bathroom", "Livingroom", "Kitchen")
+    rule_class: RuleClass = RuleClass.SIMPLE_DERIVED
+
+    def check(self, plan: PlanGraph) -> RuleResult:
+        violations: list[dict] = []
+        n_checked = 0
+        for nid, room in plan.rooms().items():
+            if room.room_type not in self.applies_to_room_types:
+                continue
+            n_checked += 1
+            diameter_units = _polygon_inscribed_circle_diameter(room.geometry)
+            diameter_m = diameter_units * plan.unit_scale_m_per_unit
+            if diameter_m + 1e-6 < self.min_diameter_m:
+                violations.append(
+                    {
+                        "node": nid,
+                        "room_type": room.room_type,
+                        "diameter_m": diameter_m,
+                        "required_m": self.min_diameter_m,
+                    }
+                )
+        passed = len(violations) == 0
+        score = (
+            1.0
+            if passed
+            else max(0.0, 1.0 - len(violations) / max(n_checked, 1))
+        )
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            score=score,
+            details={
+                "violations": violations,
+                "n_checked": n_checked,
+                "applies_to": list(self.applies_to_room_types),
+            },
+        )
+
+
+__all__ = ["CorridorMinWidth", "DoorWidth", "WheelchairTurnRadius"]

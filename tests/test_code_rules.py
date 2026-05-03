@@ -164,7 +164,9 @@ def test_jurisdiction_TR_evaluates_all_rules() -> None:
     plan = _make_compliant_plan()
     report = evaluate_jurisdiction(plan, "TR")
     assert report["jurisdiction"] == "TR"
-    assert report["aggregate"]["n_total"] == 4
+    # 6 rules: door_width, corridor_min_width, egress_travel_distance,
+    # dead_end_corridor, at_least_n_exits, wheelchair_turn_radius
+    assert report["aggregate"]["n_total"] == 6
     assert math.isfinite(report["aggregate"]["compliance_score"])
 
 

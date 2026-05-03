@@ -43,6 +43,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 30.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),
         ),
     ),
     "EU": JurisdictionSpec(
@@ -52,6 +54,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 30.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),
         ),
     ),
     "US": JurisdictionSpec(
@@ -61,6 +65,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 0.915}),  # IBC residential 36"
             ("egress_travel_distance", {"max_distance_m": 38.1}),  # 125 ft sprinklered
             ("dead_end_corridor", {"max_dead_end_length_m": 6.1}),  # 20 ft
+            ("at_least_n_exits", {"min_exits": 1}),  # IBC R-2 dwelling unit
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.525}),  # ADA 60"
         ),
     ),
     "UK": JurisdictionSpec(
@@ -70,6 +76,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),  # AD M cat 2
             ("egress_travel_distance", {"max_distance_m": 30.0}),  # AD B residential
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),  # AD M cat 2
         ),
     ),
     "DE": JurisdictionSpec(
@@ -79,6 +87,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 35.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),  # DIN 18040-2 R variant
         ),
     ),
     "TR": JurisdictionSpec(
@@ -88,6 +98,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 25.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 6.0}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),
         ),
     ),
     "JP": JurisdictionSpec(
@@ -97,6 +109,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 30.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.40}),  # Heart Building Law
         ),
     ),
     "AU": JurisdictionSpec(
@@ -106,6 +120,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.00}),  # AS 1428.1 typical
             ("egress_travel_distance", {"max_distance_m": 40.0}),  # NCC sprinklered
             ("dead_end_corridor", {"max_dead_end_length_m": 6.0}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.55}),  # AS 1428.1
         ),
     ),
     "SG": JurisdictionSpec(
@@ -115,6 +131,8 @@ JURISDICTIONS: dict[str, JurisdictionSpec] = {
             ("corridor_min_width", {"min_width_m": 1.20}),
             ("egress_travel_distance", {"max_distance_m": 30.0}),
             ("dead_end_corridor", {"max_dead_end_length_m": 7.5}),
+            ("at_least_n_exits", {"min_exits": 1}),
+            ("wheelchair_turn_radius", {"min_diameter_m": 1.50}),
         ),
     ),
 }

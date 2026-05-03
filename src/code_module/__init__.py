@@ -8,7 +8,7 @@ Importing this module triggers registration of the bundled rules.
 
 from __future__ import annotations
 
-from .accessibility import CorridorMinWidth, DoorWidth
+from .accessibility import CorridorMinWidth, DoorWidth, WheelchairTurnRadius
 from .base import (
     Connectivity,
     PlanGraph,
@@ -29,7 +29,7 @@ from .differentiable import (
     plan_to_tensor_repr,
     total_compliance_energy,
 )
-from .egress import DeadEndCorridor, EgressTravelDistance
+from .egress import AtLeastNExits, DeadEndCorridor, EgressTravelDistance
 from .jurisdictions import JURISDICTIONS, JurisdictionSpec, get_jurisdiction
 
 
@@ -69,11 +69,13 @@ def evaluate_jurisdiction(plan: PlanGraph, jurisdiction_code: str) -> dict:
 
 
 __all__ = [
+    "AtLeastNExits",
     "Connectivity",
     "CorridorMinWidth",
     "DeadEndCorridor",
     "DoorWidth",
     "EgressTravelDistance",
+    "WheelchairTurnRadius",
     "JURISDICTIONS",
     "JurisdictionSpec",
     "PlanGraph",

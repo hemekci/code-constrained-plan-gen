@@ -169,4 +169,69 @@ class DeadEndCorridor(Rule):
         )
 
 
-__all__ = ["DeadEndCorridor", "EgressTravelDistance"]
+@register_rule("at_least_n_exits")
+@dataclass
+class AtLeastNExits(Rule):
+    """Each connected component (apartment unit) must have ``min_exits`` or
+    more entrance edges (Class 3-4: proof-of-existence over the graph).
+
+    For most residential codes, ``min_exits=1`` is sufficient per apartment.
+    Larger occupancies (multi-storey, large floor area) often require 2; we
+    expose ``min_exits`` so each jurisdiction can override.
+    """
+
+    min_exits: int = 1
+    rule_class: RuleClass = RuleClass.PROOF_REQUIRED
+
+    def check(self, plan: PlanGraph) -> RuleResult:
+        rooms = plan.rooms()
+        if not rooms:
+            return RuleResult(
+                rule_name=self.name,
+                passed=False,
+                score=0.0,
+                details={"reason": "no rooms"},
+            )
+
+        # Walk connected components on the room subgraph (door + passage + entrance edges)
+        room_only = nx.Graph()
+        room_only.add_nodes_from(rooms.keys())
+        for u, v, _ in plan.graph.edges(data=True):
+            if u in rooms and v in rooms and u != v:
+                room_only.add_edge(u, v)
+
+        entrance_set = set(plan.entrance_nodes())
+        violations: list[dict] = []
+        components: list[dict] = []
+        for comp in nx.connected_components(room_only):
+            comp_rooms = [r for r in comp if r in rooms]
+            n_exits = sum(1 for r in comp_rooms if r in entrance_set)
+            comp_info = {
+                "size": len(comp_rooms),
+                "n_exits": n_exits,
+                "rooms": comp_rooms[:5],
+            }
+            components.append(comp_info)
+            if n_exits < self.min_exits:
+                violations.append(comp_info)
+
+        passed = len(violations) == 0
+        score = (
+            1.0
+            if passed
+            else max(0.0, 1.0 - len(violations) / max(len(components), 1))
+        )
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            score=score,
+            details={
+                "violations": violations,
+                "components": components,
+                "n_components": len(components),
+                "min_exits_required": self.min_exits,
+            },
+        )
+
+
+__all__ = ["AtLeastNExits", "DeadEndCorridor", "EgressTravelDistance"]
