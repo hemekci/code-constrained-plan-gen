@@ -29,6 +29,7 @@ if str(SRC) not in sys.path:
 from code_module import JURISDICTIONS, evaluate_jurisdiction  # noqa: E402
 from data_module import (  # noqa: E402
     CSVDoorIndex,
+    iter_cubicasa_floors,
     iter_msd_pickle_floors,
     iter_msd_pickle_floors_with_doors,
 )
@@ -36,8 +37,14 @@ from data_module import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-def scan(split: str, limit: int, with_doors: bool = False) -> dict:
+def scan(
+    dataset: str,
+    split: str,
+    limit: int,
+    with_doors: bool = False,
+) -> dict:
     summary: dict = {
+        "dataset": dataset,
         "split": split,
         "limit": limit,
         "with_doors": with_doors,
@@ -52,11 +59,21 @@ def scan(split: str, limit: int, with_doors: bool = False) -> dict:
             "n_all_passed": 0,
         }
 
-    if with_doors:
-        csv_index = CSVDoorIndex(REPO_ROOT / "data" / "MSD" / "raw" / "mds_V2_5.372k.csv")
-        floor_iter = iter_msd_pickle_floors_with_doors(csv_index, split=split, limit=limit)
+    if dataset == "msd":
+        if with_doors:
+            csv_index = CSVDoorIndex(REPO_ROOT / "data" / "MSD" / "raw" / "mds_V2_5.372k.csv")
+            floor_iter = iter_msd_pickle_floors_with_doors(
+                csv_index, split=split, limit=limit
+            )
+        else:
+            floor_iter = iter_msd_pickle_floors(split=split, limit=limit)
+    elif dataset == "cubicasa":
+        split_file = {"train": "train.txt", "val": "val.txt", "test": "test.txt"}.get(
+            split, "train.txt"
+        )
+        floor_iter = iter_cubicasa_floors(split_file=split_file, limit=limit)
     else:
-        floor_iter = iter_msd_pickle_floors(split=split, limit=limit)
+        raise ValueError(f"Unknown dataset: {dataset}")
 
     n_loaded = 0
     for plan in floor_iter:
@@ -98,7 +115,10 @@ def scan(split: str, limit: int, with_doors: bool = False) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--split", choices=("train", "test"), default="train")
+    parser.add_argument(
+        "--dataset", choices=("msd", "cubicasa"), default="msd"
+    )
+    parser.add_argument("--split", choices=("train", "val", "test"), default="train")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument(
         "--with-doors",
@@ -115,7 +135,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    summary = scan(args.split, args.limit, with_doors=args.with_doors)
+    summary = scan(args.dataset, args.split, args.limit, with_doors=args.with_doors)
     with args.out.open("w") as fh:
         json.dump(summary, fh, indent=2, default=str)
 
