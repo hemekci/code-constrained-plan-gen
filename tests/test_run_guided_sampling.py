@@ -20,13 +20,22 @@ def test_preflight_passes_on_mock_backbone_shape() -> None:
     assert rgs.preflight_validate_shape("TR", (1, 4, 2)) is True
 
 
-def test_preflight_rejects_housediffusion_raw_shape() -> None:
-    """A (B, 32, 2) raw HD sample must be flagged so callers fix wiring first."""
-    assert rgs.preflight_validate_shape("TR", (1, 32, 2)) is False
+def test_preflight_passes_on_housediffusion_shape_with_adapter() -> None:
+    """(B, N_rooms, 32, 2) must validate when the housediffusion adapter is on."""
+    assert rgs.preflight_validate_shape(
+        "TR", (1, 1, 32, 2), shape_adapter="housediffusion"
+    ) is True
+
+
+def test_preflight_fails_on_housediffusion_shape_without_adapter() -> None:
+    """Without the adapter, (B, N_rooms, 32, 2) silently miswires; must be flagged."""
+    assert rgs.preflight_validate_shape(
+        "TR", (1, 1, 32, 2), shape_adapter="identity"
+    ) is False
 
 
 def test_preflight_rejects_obviously_wrong_rank() -> None:
-    """A 1-D tensor cannot encode (..., 4, 2) and must be rejected."""
+    """A 1-D tensor cannot encode (..., V, 2) and must be rejected."""
     assert rgs.preflight_validate_shape("TR", (8,)) is False
 
 

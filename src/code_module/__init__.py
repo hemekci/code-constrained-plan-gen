@@ -37,6 +37,11 @@ from .repair import (
     repair_dead_end_corridor,
     repair_wheelchair_turn_radius,
 )
+from .shape_adapter import (
+    collapse_rooms_to_doors,
+    housediffusion_x_to_rect_corners,
+    polygons_to_rotated_rect,
+)
 from .jurisdictions import (
     JURISDICTIONS,
     JurisdictionSpec,
@@ -99,6 +104,7 @@ __all__ = [
     "RULE_REGISTRY",
     "TensorRepr",
     "apply_hard_repairs",
+    "collapse_rooms_to_doors",
     "build_rule",
     "compliance_energy_for_plan",
     "corridor_width_energy",
@@ -106,8 +112,10 @@ __all__ = [
     "egress_distance_energy",
     "evaluate_jurisdiction",
     "get_jurisdiction",
+    "housediffusion_x_to_rect_corners",
     "permissive_door_jurisdiction",
     "plan_to_tensor_repr",
+    "polygons_to_rotated_rect",
     "register_rule",
     "repair_at_least_n_exits",
     "repair_dead_end_corridor",

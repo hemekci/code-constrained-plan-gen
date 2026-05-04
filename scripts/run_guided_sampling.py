@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import statistics
 import sys
 import time
@@ -66,6 +67,7 @@ from code_module import (  # noqa: E402
     door_width_energy,
     corridor_width_energy,
     egress_distance_energy,
+    housediffusion_x_to_rect_corners,
 )
 from code_module.guided_sampling import universal_guidance_sample  # noqa: E402
 from model_module import MockDiffusionBackbone  # noqa: E402
@@ -82,8 +84,17 @@ logger = logging.getLogger("guided_sampling")
 SOFT_GUIDANCE_RULES = ("door_width", "corridor_min_width", "egress_travel_distance")
 
 
+SHAPE_ADAPTERS: dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
+    "identity": lambda x: x,  # mock backbone already in (..., 4, 2)
+    "housediffusion": housediffusion_x_to_rect_corners,
+}
+
+
 def jurisdiction_energy_fn(
-    code: str, *, weight_per_rule: float = 1.0
+    code: str,
+    *,
+    weight_per_rule: float = 1.0,
+    shape_adapter: str = "identity",
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """Build a scalar energy function from a jurisdiction's soft-rule thresholds.
 
@@ -108,7 +119,15 @@ def jurisdiction_energy_fn(
     min_corr = float(corridor_kwargs.get("min_width_m", 1.20))
     max_egress = float(egress_kwargs.get("max_distance_m", 30.0))
 
+    if shape_adapter not in SHAPE_ADAPTERS:
+        raise SystemExit(
+            f"unknown shape_adapter '{shape_adapter}' "
+            f"(choose from {sorted(SHAPE_ADAPTERS)})"
+        )
+    adapt = SHAPE_ADAPTERS[shape_adapter]
+
     def energy(x: torch.Tensor) -> torch.Tensor:
+        x = adapt(x)
         # Each term is tensor-only and broadcasts across the leading axes.
         e_door = door_width_energy(x, min_width_m=min_door)
         # corridor_width_energy expects a (B, N, 4, 2) layout in the same
@@ -253,7 +272,10 @@ def run_phase(
 
 
 def preflight_validate_shape(
-    jurisdiction_code: str, sample_shape: tuple[int, ...]
+    jurisdiction_code: str,
+    sample_shape: tuple[int, ...],
+    *,
+    shape_adapter: str = "identity",
 ) -> bool:
     """Validate that the energy fn semantically matches the backbone shape.
 
@@ -277,59 +299,93 @@ def preflight_validate_shape(
         spec_rules.get("corridor_min_width", {}).get("min_width_m", 1.20)
     )
 
-    # The rule energies (door_width_energy, corridor_width_energy) expect a
-    # tensor of shape (..., 4, 2) — 4 rotated-rect corners per polygon.
-    # Reject any sample_shape whose second-to-last dim is not 4.
-    if len(sample_shape) < 2 or sample_shape[-2] != 4:
+    if shape_adapter not in SHAPE_ADAPTERS:
         logger.error(
-            "Pre-flight: sample_shape %s does not match the (..., 4, 2) "
-            "rotated-rect layout the soft-rule energies were written for. "
-            "HouseDiffusion uses (B, N_rooms, 32, 2); add a shape adapter "
-            "to jurisdiction_energy_fn that converts 32-vertex polygons to "
-            "rotated rect corners before the energy fn is called.",
-            sample_shape,
+            "Pre-flight: unknown shape_adapter '%s' (choose %s)",
+            shape_adapter, sorted(SHAPE_ADAPTERS),
         )
         return False
+    adapt = SHAPE_ADAPTERS[shape_adapter]
 
     torch.manual_seed(0)
 
-    # --- Negative control: clearly-violating ---
-    x_bad = torch.rand(*sample_shape, dtype=torch.float64) * 0.05  # ~5 cm
+    # --- Negative control: clearly-violating (~5 cm scale) ---
+    x_bad = torch.rand(*sample_shape, dtype=torch.float64) * 0.05
 
-    # --- Positive control: 1 m unit square at the origin, rotated-rect order ---
-    # Tile the four corners across whatever leading dims the backbone uses.
-    unit = torch.tensor(
-        [[0.0, 0.0], [1.5, 0.0], [1.5, 1.5], [0.0, 1.5]], dtype=torch.float64
-    )
+    # --- Positive control: 1.5 m square at the origin, broadcast across
+    # whatever vertex-count the backbone uses. ---
+    if len(sample_shape) < 2 or sample_shape[-1] != 2:
+        logger.error(
+            "Pre-flight: sample_shape %s must end in (..., V>=2, 2)",
+            sample_shape,
+        )
+        return False
+    n_vertices = sample_shape[-2]
+    if n_vertices == 4:
+        unit = torch.tensor(
+            [[0.0, 0.0], [1.5, 0.0], [1.5, 1.5], [0.0, 1.5]],
+            dtype=torch.float64,
+        )
+    else:
+        # General compliant polygon: V points sampled along the unit square's
+        # boundary, scaled to 1.5 m.
+        t = torch.linspace(0.0, 4.0, n_vertices + 1, dtype=torch.float64)[:-1]
+        unit_pts = []
+        for ti in t:
+            seg = int(ti.item()) % 4
+            f = float(ti.item()) - seg
+            corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            x0, y0 = corners[seg]
+            x1, y1 = corners[(seg + 1) % 4]
+            unit_pts.append((x0 + f * (x1 - x0), y0 + f * (y1 - y0)))
+        unit = torch.tensor(unit_pts, dtype=torch.float64) * 1.5
     x_good = unit.expand(*sample_shape).contiguous()
 
     def _energies(x: torch.Tensor) -> dict[str, float]:
-        return {
-            "door_width": float(door_width_energy(x, min_width_m=min_door)),
-            "corridor_min_width": float(
+        try:
+            x = adapt(x)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("shape adapter '%s' crashed: %s", shape_adapter, exc)
+            return {"door_width": float("nan"), "corridor_min_width": float("nan")}
+        out: dict[str, float] = {}
+        try:
+            out["door_width"] = float(door_width_energy(x, min_width_m=min_door))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("door_width_energy crashed on shape %s: %s", tuple(x.shape), exc)
+            out["door_width"] = float("nan")
+        try:
+            out["corridor_min_width"] = float(
                 corridor_width_energy(x, min_width_m=min_corr)
-            ),
-        }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "corridor_width_energy crashed on shape %s: %s",
+                tuple(x.shape), exc,
+            )
+            out["corridor_min_width"] = float("nan")
+        return out
 
     bad = _energies(x_bad)
     good = _energies(x_good)
 
-    logger.info("Pre-flight shape validation on %s:", sample_shape)
+    logger.info("Pre-flight shape validation on %s (adapter=%s):",
+                sample_shape, shape_adapter)
     logger.info("  rule                    violating    compliant   verdict")
     all_ok = True
     for name in ("door_width", "corridor_min_width"):
-        violating_positive = bad[name] > 1e-6
-        compliant_zero = good[name] < 1e-6
-        ok = violating_positive and compliant_zero
+        b, g = bad[name], good[name]
+        if math.isnan(b) or math.isnan(g):
+            verdict = "CRASH"
+            ok = False
+        else:
+            violating_positive = b > 1e-6
+            compliant_zero = g < 1e-6
+            ok = violating_positive and compliant_zero
+            verdict = "OK" if ok else ("WIRED_WRONG" if not compliant_zero else "INACTIVE")
         all_ok &= ok
-        verdict = "OK" if ok else (
-            "WIRED_WRONG"
-            if not compliant_zero
-            else "INACTIVE"
-        )
         logger.info(
             "  %-22s %10.4f   %10.6f   %s",
-            name, bad[name], good[name], verdict,
+            name, b, g, verdict,
         )
 
     if not all_ok:
@@ -412,6 +468,16 @@ def main() -> int:
         "--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING")
     )
     p.add_argument(
+        "--shape-adapter",
+        default="identity",
+        choices=sorted(SHAPE_ADAPTERS),
+        help=(
+            "How to convert the backbone's tensor into (..., 4, 2) "
+            "rotated-rect corners. 'identity' for mock backbone, "
+            "'housediffusion' for HD's (B, N_rooms, V, 2)."
+        ),
+    )
+    p.add_argument(
         "--validate-shape",
         action="store_true",
         help=(
@@ -428,11 +494,21 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
 
+    # Default shape adapter matches the backbone unless overridden.
+    if args.shape_adapter == "identity" and args.backbone == "housediffusion":
+        args.shape_adapter = "housediffusion"
+
     backbone, sample_shape = make_backbone(args.backbone, checkpoint=args.checkpoint)
-    energy_fn = jurisdiction_energy_fn(args.jurisdiction)
+    energy_fn = jurisdiction_energy_fn(
+        args.jurisdiction, shape_adapter=args.shape_adapter
+    )
 
     if args.validate_shape:
-        ok = preflight_validate_shape(args.jurisdiction, sample_shape)
+        ok = preflight_validate_shape(
+            args.jurisdiction,
+            sample_shape,
+            shape_adapter=args.shape_adapter,
+        )
         if not ok:
             return 2
 
