@@ -1,0 +1,16 @@
+{
+  "id": "hakanemekci/plan-compliance-smoke",
+  "title": "Plan Compliance Smoke",
+  "code_file": "kaggle_smoke.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": ["caspervanengelenburg/modified-swiss-dwellings"],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
