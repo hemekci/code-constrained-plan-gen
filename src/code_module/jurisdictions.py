@@ -146,4 +146,30 @@ def get_jurisdiction(code: str) -> JurisdictionSpec:
     return JURISDICTIONS[code]
 
 
-__all__ = ["JURISDICTIONS", "JurisdictionSpec", "get_jurisdiction"]
+def permissive_door_jurisdiction(code: str) -> JurisdictionSpec:
+    """Return a jurisdiction with door_width restricted to accessible-route doors.
+
+    This matches how real codes scope the door-width threshold (entrance,
+    corridor, and primary-space doors only — not interior bedroom doors).
+    Use this variant alongside the strict version to expose how much of the
+    headline non-compliance number is explained by interior doors that are
+    legally out-of-scope.
+    """
+    base = get_jurisdiction(code)
+    rules = tuple(
+        (rname, {**rkwargs, "scope": "accessible_route"})
+        if rname == "door_width"
+        else (rname, rkwargs)
+        for rname, rkwargs in base.rules
+    )
+    return JurisdictionSpec(
+        name=f"{base.name} — accessible-route door scope", rules=rules
+    )
+
+
+__all__ = [
+    "JURISDICTIONS",
+    "JurisdictionSpec",
+    "get_jurisdiction",
+    "permissive_door_jurisdiction",
+]

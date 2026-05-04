@@ -30,7 +30,19 @@ from .differentiable import (
     total_compliance_energy,
 )
 from .egress import AtLeastNExits, DeadEndCorridor, EgressTravelDistance
-from .jurisdictions import JURISDICTIONS, JurisdictionSpec, get_jurisdiction
+from .repair import (
+    RepairReport,
+    apply_hard_repairs,
+    repair_at_least_n_exits,
+    repair_dead_end_corridor,
+    repair_wheelchair_turn_radius,
+)
+from .jurisdictions import (
+    JURISDICTIONS,
+    JurisdictionSpec,
+    get_jurisdiction,
+    permissive_door_jurisdiction,
+)
 
 
 def evaluate_jurisdiction(plan: PlanGraph, jurisdiction_code: str) -> dict:
@@ -82,9 +94,11 @@ __all__ = [
     "RoomNode",
     "Rule",
     "RuleClass",
+    "RepairReport",
     "RuleResult",
     "RULE_REGISTRY",
     "TensorRepr",
+    "apply_hard_repairs",
     "build_rule",
     "compliance_energy_for_plan",
     "corridor_width_energy",
@@ -92,7 +106,11 @@ __all__ = [
     "egress_distance_energy",
     "evaluate_jurisdiction",
     "get_jurisdiction",
+    "permissive_door_jurisdiction",
     "plan_to_tensor_repr",
     "register_rule",
+    "repair_at_least_n_exits",
+    "repair_dead_end_corridor",
+    "repair_wheelchair_turn_radius",
     "total_compliance_energy",
 ]

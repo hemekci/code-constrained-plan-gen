@@ -51,6 +51,40 @@ def _polygon_max_dimension(poly: Polygon) -> float:
     return _rotated_box_sides(poly)[1]
 
 
+_ACCESSIBLE_ROUTE_ROOMS: frozenset[str] = frozenset(
+    {"Corridor", "Livingroom", "Kitchen", "Bathroom", "Dining"}
+)
+
+
+def _edge_is_accessible_route(
+    plan: PlanGraph, u: int, v: int, data: dict
+) -> bool:
+    """Whether a door edge is on the building's accessible route.
+
+    Accessible-route doors (per most codes) are the ones whose width is
+    actually load-bearing for accessibility: entrance doors, doors leading
+    to corridors, and doors between primary living spaces. Interior doors
+    onto e.g. bedroom-only corridors are *not* accessible-route doors and
+    legally don't have to meet the same threshold.
+
+    Heuristic: an edge counts as accessible route if at least one of its
+    endpoints is an Entrance node, OR both endpoints are rooms whose type
+    is in ``_ACCESSIBLE_ROUTE_ROOMS``.
+    """
+    if data.get("connectivity") == Connectivity.ENTRANCE:
+        return True
+    rooms = plan.rooms()
+    ru, rv = rooms.get(u), rooms.get(v)
+    if ru is None or rv is None:
+        return False
+    if ru.room_type == "Corridor" or rv.room_type == "Corridor":
+        return True
+    return (
+        ru.room_type in _ACCESSIBLE_ROUTE_ROOMS
+        and rv.room_type in _ACCESSIBLE_ROUTE_ROOMS
+    )
+
+
 @register_rule("door_width")
 @dataclass
 class DoorWidth(Rule):
@@ -59,20 +93,37 @@ class DoorWidth(Rule):
     `min_width_m`: required width in meters. Defaults to 0.80 m
     (ISO 21542 doorway clear width minimum). ADA requires 32 inches ≈ 0.81 m;
     TS 9111 requires 0.90 m for accessible main doors.
+
+    `scope`: which doors to evaluate. ``"all"`` (default) is the strict
+    interpretation we used in the May-2 baseline. ``"accessible_route"``
+    restricts the check to entrance doors and doors on the corridor/primary-
+    space network — closer to how real codes actually scope the threshold.
+    The two scopes give very different headline numbers on real Swiss
+    apartments where interior bedroom doors are 0.68-0.84 m wide and
+    technically out-of-scope.
     """
 
     min_width_m: float = 0.80
     rule_class: RuleClass = RuleClass.SINGLE_ATTRIBUTE
+    scope: str = "all"  # "all" | "accessible_route"
 
-    def check(self, plan: PlanGraph) -> RuleResult:
-        violations: list[dict[str, float]] = []
-        n_doors = 0
+    def _door_edges(self, plan: PlanGraph):
         for u, v, data in plan.graph.edges(data=True):
             if data.get("connectivity") not in (
                 Connectivity.DOOR,
                 Connectivity.ENTRANCE,
             ):
                 continue
+            if self.scope == "accessible_route" and not _edge_is_accessible_route(
+                plan, u, v, data
+            ):
+                continue
+            yield u, v, data
+
+    def check(self, plan: PlanGraph) -> RuleResult:
+        violations: list[dict[str, float]] = []
+        n_doors = 0
+        for u, v, data in self._door_edges(plan):
             n_doors += 1
             door_geom = data.get("door_geometry")
             if door_geom is None:
@@ -94,17 +145,16 @@ class DoorWidth(Rule):
             rule_name=self.name,
             passed=passed,
             score=score,
-            details={"violations": violations, "n_doors": n_doors},
+            details={
+                "violations": violations,
+                "n_doors": n_doors,
+                "scope": self.scope,
+            },
         )
 
     def energy(self, plan: PlanGraph) -> float:
         total = 0.0
-        for _, _, data in plan.graph.edges(data=True):
-            if data.get("connectivity") not in (
-                Connectivity.DOOR,
-                Connectivity.ENTRANCE,
-            ):
-                continue
+        for _, _, data in self._door_edges(plan):
             door_geom = data.get("door_geometry")
             if door_geom is None:
                 continue

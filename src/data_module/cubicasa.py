@@ -23,7 +23,7 @@ from typing import Iterator, Optional
 from xml.etree import ElementTree as ET
 
 import networkx as nx
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 
 from code_module import Connectivity, PlanGraph
 
@@ -172,6 +172,12 @@ def _element_to_polygon(elem: ET.Element) -> Optional[Polygon]:
         poly = Polygon(pts)
         if not poly.is_valid:
             poly = poly.buffer(0)
+        # buffer(0) on a self-intersecting polygon can produce a MultiPolygon;
+        # take the largest connected component as the room footprint.
+        if isinstance(poly, MultiPolygon):
+            if poly.is_empty:
+                return None
+            poly = max(poly.geoms, key=lambda p: p.area)
         if poly.is_empty or poly.area < 1.0:
             return None
         return poly
@@ -282,26 +288,63 @@ def load_cubicasa_floor(
                 )
                 break
 
-    # Entrance heuristic: room polygons that touch the SVG bounding box are
-    # boundary-adjacent and get an Entrance edge so egress can find an exit.
+    # Entrance heuristic: a real entrance is a Door element on the building
+    # perimeter. Find doors whose centroid is within `entrance_boundary_margin`
+    # of the global plan bbox, then mark whichever room is closest to each
+    # such door as having an Entrance self-loop. This is much tighter than
+    # the previous "any room touching the bbox" heuristic, which fired on
+    # every perimeter-adjacent bedroom.
     if rooms:
-        all_x = [pt for r, _ in rooms for pt in r.exterior.coords]
-        if all_x:
-            xs = [x for x, _ in all_x]
-            ys = [y for _, y in all_x]
+        all_pts = [pt for r, _ in rooms for pt in r.exterior.coords]
+        if all_pts:
+            xs = [x for x, _ in all_pts]
+            ys = [y for _, y in all_pts]
             bbox = (min(xs), min(ys), max(xs), max(ys))
-            margin = 1.0  # SVG-unit tolerance
-            for idx, (poly, _) in enumerate(rooms):
-                px_min, py_min, px_max, py_max = poly.bounds
-                touches_boundary = (
-                    abs(px_min - bbox[0]) < margin
-                    or abs(py_min - bbox[1]) < margin
-                    or abs(px_max - bbox[2]) < margin
-                    or abs(py_max - bbox[3]) < margin
+            entrance_boundary_margin = max(
+                door_distance_threshold * 2.0,
+                0.01 * max(bbox[2] - bbox[0], bbox[3] - bbox[1]),
+            )
+
+            entrance_rooms: set[int] = set()
+            for door in doors:
+                cx, cy = door.centroid.x, door.centroid.y
+                on_perimeter = (
+                    abs(cx - bbox[0]) < entrance_boundary_margin
+                    or abs(cy - bbox[1]) < entrance_boundary_margin
+                    or abs(cx - bbox[2]) < entrance_boundary_margin
+                    or abs(cy - bbox[3]) < entrance_boundary_margin
                 )
-                if touches_boundary:
-                    g.add_edge(idx, idx, connectivity=Connectivity.ENTRANCE)
-                    break  # one entrance per plan is sufficient for our rule set
+                if not on_perimeter:
+                    continue
+                # Attach the door to the closest room (the building-side room
+                # of an exterior door — by construction the only adjacent room).
+                best_idx, best_d = None, float("inf")
+                for idx, (poly, _) in enumerate(rooms):
+                    d = door.distance(poly)
+                    if d < best_d:
+                        best_idx, best_d = idx, d
+                if best_idx is not None and best_d < door_distance_threshold:
+                    entrance_rooms.add(best_idx)
+
+            # Fallback: if no perimeter doors were detected (CubiCasa SVGs
+            # vary), fall back to a single boundary-touching room so egress
+            # rules at least have one exit to pin to.
+            if not entrance_rooms:
+                margin = 1.0
+                for idx, (poly, _) in enumerate(rooms):
+                    px_min, py_min, px_max, py_max = poly.bounds
+                    touches_boundary = (
+                        abs(px_min - bbox[0]) < margin
+                        or abs(py_min - bbox[1]) < margin
+                        or abs(px_max - bbox[2]) < margin
+                        or abs(py_max - bbox[3]) < margin
+                    )
+                    if touches_boundary:
+                        entrance_rooms.add(idx)
+                        break
+
+            for idx in entrance_rooms:
+                g.add_edge(idx, idx, connectivity=Connectivity.ENTRANCE)
 
     return PlanGraph(
         graph=g,

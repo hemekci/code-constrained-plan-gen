@@ -192,3 +192,68 @@ def test_global_jurisdiction_set_is_complete() -> None:
     )
     for code, spec in JURISDICTIONS.items():
         assert spec.build(), f"Jurisdiction {code} produced empty rule list"
+
+
+def _make_plan_with_narrow_bedroom_door() -> PlanGraph:
+    """Compliant accessible-route doors; one bedroom-bedroom door is narrow."""
+    bed1 = _box(0, 0, 4, 4)
+    bed2 = _box(5.4, 0, 4, 4)
+    bed3 = _box(10.8, 0, 4, 4)
+    corr = _box(4, 0, 1.4, 6)
+    g = nx.Graph()
+    g.add_node("bed1", geometry=bed1, room_type="Bedroom", centroid=(2.0, 2.0))
+    g.add_node("bed2", geometry=bed2, room_type="Bedroom", centroid=(7.4, 2.0))
+    g.add_node("bed3", geometry=bed3, room_type="Bedroom", centroid=(12.8, 2.0))
+    g.add_node("corr", geometry=corr, room_type="Corridor", centroid=(4.7, 3.0))
+    # Accessible-route doors (corridor-bedroom): wide
+    g.add_edge(
+        "bed1", "corr",
+        connectivity=Connectivity.DOOR,
+        door_geometry=_door(3.95, 1.5, 0.95, 0.1),
+    )
+    g.add_edge(
+        "corr", "bed2",
+        connectivity=Connectivity.DOOR,
+        door_geometry=_door(5.35, 1.5, 0.95, 0.1),
+    )
+    # Bedroom-bedroom internal door: narrow (bypassed by accessible_route scope)
+    g.add_edge(
+        "bed2", "bed3",
+        connectivity=Connectivity.DOOR,
+        door_geometry=_door(9.35, 1.5, 0.65, 0.1),
+    )
+    g.add_edge(
+        "corr", "corr",
+        connectivity=Connectivity.ENTRANCE,
+        door_geometry=_door(4.6, 5.95, 0.95, 0.1),
+    )
+    return PlanGraph(graph=g, plan_id="test-permissive")
+
+
+def test_door_scope_accessible_route_skips_bedroom_internal_door() -> None:
+    """The permissive scope must ignore non-accessible-route doors."""
+    plan = _make_plan_with_narrow_bedroom_door()
+    strict = DoorWidth(min_width_m=0.90, scope="all").check(plan)
+    permissive = DoorWidth(min_width_m=0.90, scope="accessible_route").check(plan)
+    assert not strict.passed, "strict scope must catch the narrow bedroom door"
+    assert permissive.passed, (
+        "accessible_route scope must skip the bedroom-bedroom door "
+        f"(violations={permissive.details['violations']})"
+    )
+    # n_doors counts also reflect the scope: permissive sees fewer doors
+    assert permissive.details["n_doors"] < strict.details["n_doors"]
+
+
+def test_permissive_door_jurisdiction_matches_underlying_thresholds() -> None:
+    from code_module import permissive_door_jurisdiction
+
+    base = get_jurisdiction("TR")
+    perm = permissive_door_jurisdiction("TR")
+    base_door = dict(base.rules)["door_width"]
+    perm_door = dict(perm.rules)["door_width"]
+    assert perm_door["min_width_m"] == base_door["min_width_m"]
+    assert perm_door["scope"] == "accessible_route"
+    # Egress rule is unchanged
+    assert dict(perm.rules)["egress_travel_distance"] == dict(base.rules)[
+        "egress_travel_distance"
+    ]
