@@ -90,7 +90,12 @@ def jurisdiction_energy_fn(
     The energy is a tensor-only sum so it can be applied to whatever
     shape ``predict_x0`` returns. Concrete coordinate semantics are the
     backbone's responsibility — for the mock backbone, we treat the
-    tensor as a stack of door corners.
+    tensor as a stack of door corners shape (B, 4, 2).
+
+    HouseDiffusion produces (B, N_rooms, 32, 2). A shape adapter for that
+    case is a separate Stage-3 sub-task; until it exists, the corridor and
+    egress terms silently return zero on (B, 32, 2) inputs. The driver's
+    ``--validate-shape`` flag surfaces this before any GPU work.
     """
     spec_rules = dict(JURISDICTIONS[code].rules)
     door_kwargs = spec_rules.get("door_width", {"min_width_m": 0.85})
@@ -247,6 +252,95 @@ def run_phase(
 # ---------------------------------------------------------------------------
 
 
+def preflight_validate_shape(
+    jurisdiction_code: str, sample_shape: tuple[int, ...]
+) -> bool:
+    """Validate that the energy fn semantically matches the backbone shape.
+
+    Two checks per soft-rule term:
+        1. Negative control — a clearly-violating input (5 cm coords) must
+           produce energy > 0.
+        2. Positive control — a compliant input (a 1 m square per polygon,
+           rotated-rect-ordered) must produce energy ≈ 0 for door/corridor
+           terms.
+
+    Both must hold for the term to be considered correctly wired. If only
+    the negative control passes, the energy fn is producing plausible-
+    looking numbers but does not actually encode the rule on this shape
+    (the silent-failure case). The mock backbone uses (B, 4, 2) which the
+    rule energies were written against; HouseDiffusion uses (B, N_rooms,
+    32, 2) which needs a shape adapter.
+    """
+    spec_rules = dict(JURISDICTIONS[jurisdiction_code].rules)
+    min_door = float(spec_rules.get("door_width", {}).get("min_width_m", 0.85))
+    min_corr = float(
+        spec_rules.get("corridor_min_width", {}).get("min_width_m", 1.20)
+    )
+
+    # The rule energies (door_width_energy, corridor_width_energy) expect a
+    # tensor of shape (..., 4, 2) — 4 rotated-rect corners per polygon.
+    # Reject any sample_shape whose second-to-last dim is not 4.
+    if len(sample_shape) < 2 or sample_shape[-2] != 4:
+        logger.error(
+            "Pre-flight: sample_shape %s does not match the (..., 4, 2) "
+            "rotated-rect layout the soft-rule energies were written for. "
+            "HouseDiffusion uses (B, N_rooms, 32, 2); add a shape adapter "
+            "to jurisdiction_energy_fn that converts 32-vertex polygons to "
+            "rotated rect corners before the energy fn is called.",
+            sample_shape,
+        )
+        return False
+
+    torch.manual_seed(0)
+
+    # --- Negative control: clearly-violating ---
+    x_bad = torch.rand(*sample_shape, dtype=torch.float64) * 0.05  # ~5 cm
+
+    # --- Positive control: 1 m unit square at the origin, rotated-rect order ---
+    # Tile the four corners across whatever leading dims the backbone uses.
+    unit = torch.tensor(
+        [[0.0, 0.0], [1.5, 0.0], [1.5, 1.5], [0.0, 1.5]], dtype=torch.float64
+    )
+    x_good = unit.expand(*sample_shape).contiguous()
+
+    def _energies(x: torch.Tensor) -> dict[str, float]:
+        return {
+            "door_width": float(door_width_energy(x, min_width_m=min_door)),
+            "corridor_min_width": float(
+                corridor_width_energy(x, min_width_m=min_corr)
+            ),
+        }
+
+    bad = _energies(x_bad)
+    good = _energies(x_good)
+
+    logger.info("Pre-flight shape validation on %s:", sample_shape)
+    logger.info("  rule                    violating    compliant   verdict")
+    all_ok = True
+    for name in ("door_width", "corridor_min_width"):
+        violating_positive = bad[name] > 1e-6
+        compliant_zero = good[name] < 1e-6
+        ok = violating_positive and compliant_zero
+        all_ok &= ok
+        verdict = "OK" if ok else (
+            "WIRED_WRONG"
+            if not compliant_zero
+            else "INACTIVE"
+        )
+        logger.info(
+            "  %-22s %10.4f   %10.6f   %s",
+            name, bad[name], good[name], verdict,
+        )
+
+    if not all_ok:
+        logger.error(
+            "Pre-flight FAILED — at least one rule energy does not match "
+            "this backbone's tensor shape. Fix the energy fn or add a "
+            "decode adapter before running pilot/full."
+        )
+    return all_ok
+
+
 def make_backbone(name: str, *, checkpoint: Optional[str] = None) -> tuple:
     """Return (backbone, sample_shape).
 
@@ -317,6 +411,16 @@ def main() -> int:
     p.add_argument(
         "--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING")
     )
+    p.add_argument(
+        "--validate-shape",
+        action="store_true",
+        help=(
+            "Pre-flight: build a random sample of sample_shape, evaluate the "
+            "energy fn, and assert each soft-rule term is non-zero. Catches "
+            "shape mismatches between the backbone output and the energy fn "
+            "before GPU spend."
+        ),
+    )
     args = p.parse_args()
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -326,6 +430,11 @@ def main() -> int:
 
     backbone, sample_shape = make_backbone(args.backbone, checkpoint=args.checkpoint)
     energy_fn = jurisdiction_energy_fn(args.jurisdiction)
+
+    if args.validate_shape:
+        ok = preflight_validate_shape(args.jurisdiction, sample_shape)
+        if not ok:
+            return 2
 
     run_id = f"{args.jurisdiction}-{args.backbone}-{int(time.time())}"
     out_dir = Path(args.out_dir) / run_id
